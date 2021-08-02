@@ -12,6 +12,256 @@
 #pragma comment(lib,"libcrypto.lib")
 #pragma comment(lib,"libssl.lib")
 
+#define CURL_STATICLIB
+
+#include <stdio.h>
+#include <curl/curl.h>
+
+static char* plt_kv_tokenurl = "https://login.microsoftonline.com/cc7e3b5c-710d-42af-b07f-a912f1b80316/oauth2/v2.0/token";
+static char* plt_kv_client_id = "cd9706b6-1ff9-4120-b221-7b5a2b6b8bdb";
+static char* plt_kv_client_secret = "8W8rY.xz0hQb8____z.949rcTndzblHd-Q";
+static char* plt_kv_scope = "https://vault.azure.net/.default";
+static char* plt_kv_grant_type = "client_credentials";
+
+static char* plt_kv_url = "https://pltkey.vault.azure.net/secrets/secret/d395b74f280c4037b3b561e4ab216f48?api-version=7.2";
+
+static char* plt_key_path = "C:\\Program Files\\Attunity\\Replicate\\addons\\plt_key.txt";
+
+char* concatenate(char* a, char* b, char* c)
+{
+	int size = strlen(a) + strlen(b) + strlen(c) + 1;
+	char* str = malloc(size);
+	strcpy(str, a);
+	strcat(str, b);
+	strcat(str, c);
+
+	return str;
+}
+
+typedef struct {
+	unsigned char* buffer;
+	size_t len;
+	size_t buflen;
+} get_request;
+
+#define CHUNK_SIZE 2048
+
+size_t write_callback(char* ptr, size_t size, size_t nmemb, void* userdata)
+{
+	size_t realsize = size * nmemb;
+	get_request* req = (get_request*)userdata;
+
+	//printf("receive chunk of %zu bytes\n", realsize);
+
+	while (req->buflen < req->len + realsize + 1)
+	{
+		req->buffer = realloc(req->buffer, req->buflen + CHUNK_SIZE);
+		req->buflen += CHUNK_SIZE;
+	}
+	memcpy(&req->buffer[req->len], ptr, realsize);
+	req->len += realsize;
+	req->buffer[req->len] = 0;
+
+	return realsize;
+}
+
+void removeChar(char* str, char garbage) {
+
+	char* src, * dst;
+	for (src = dst = str; *src != '\0'; src++) {
+		*dst = *src;
+		if (*dst != garbage) dst++;
+	}
+	*dst = '\0';
+}
+
+
+
+
+char* auth_plt_token() {
+	unsigned char* token = "";
+
+	CURL* curl;
+	CURLcode res;
+	curl_global_init(CURL_GLOBAL_ALL);
+
+	get_request req = { .buffer = NULL, .len = 0, .buflen = 0 };
+
+	curl = curl_easy_init();
+	if (curl) {
+
+		char* url = plt_kv_tokenurl;//concatenate("https://login.microsoftonline.com/", plt_kv_dir, "/oauth2/v2.0/token");
+		char data[1024];
+		sprintf(data, "client_id=%s&client_secret=%s&scope=%s&grant_type=%s", plt_kv_client_id, plt_kv_client_secret, plt_kv_scope, plt_kv_grant_type);
+
+		curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
+		curl_easy_setopt(curl, CURLOPT_URL, url);
+		curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+		curl_easy_setopt(curl, CURLOPT_DEFAULT_PROTOCOL, "https");
+		struct curl_slist* headers = NULL;
+		headers = curl_slist_append(headers, "Content-Type: application/x-www-form-urlencoded");
+		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+		req.buffer = malloc(CHUNK_SIZE);
+		req.buflen = CHUNK_SIZE;
+
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&req);
+
+
+		//const char* data = "client_id=cd9706b6-1ff9-4120-b221-7b5a2b6b8bdb&scope=https%3A%2F%2Fvault.azure.net%2F.default&grant_type=client_credentials&client_secret=8W8rY.xz0hQb8____z.949rcTndzblHd-Q";
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
+		res = curl_easy_perform(curl);
+
+
+		/* Check for errors */
+		if (res != CURLE_OK)
+			fprintf(stderr, "curl_easy_perform() failed: %s\n",
+				curl_easy_strerror(res));
+
+		char* ptr = req.buffer;
+		char* value = "";
+
+		removeChar(ptr, '{');
+		removeChar(ptr, '}');
+		removeChar(ptr, '"');
+		char* spltValue = strtok(ptr, ",");
+
+		// loop through the string to extract all other tokens
+		while (spltValue != NULL) {
+
+			if (strstr(spltValue, "access_token") != NULL)
+			{
+				spltValue = strchr(spltValue, ':');
+				if (spltValue == NULL) {
+					break;
+				}
+				spltValue++;
+				value = spltValue;
+			}
+			//printf(" %s\n", spltValue); //printing each token
+			spltValue = strtok(NULL, ",");
+		}
+
+
+		//while (ptr) {
+		//	ptr = strstr(ptr, "\"access_token\"");
+		//	if (ptr == NULL) {
+		//		break;
+		//	}
+		//	ptr = strchr(ptr, ':');
+		//	if (ptr == NULL) {
+		//		break;
+		//	}
+		//	ptr++;
+		//	value = ptr;
+		//	if (*ptr != '}') {
+		//		break;
+		//	}
+		//	ptr++;
+		//	
+		//	//printf("%lu\n", value);
+		//}
+
+		//removeChar(value, '"');
+		//removeChar(value, '}');
+
+		token = value;
+
+		/* always cleanup */
+		curl_easy_cleanup(curl);
+	}
+
+	return token;
+}
+
+int auth_plt_gen_key()
+{
+	char* token = auth_plt_token();
+	printf("Token: \n%s\n\n", token);
+
+	char* key = "";
+
+	CURL* curl;
+	CURLcode res;
+	curl_global_init(CURL_GLOBAL_ALL);
+
+	get_request req = { .buffer = NULL, .len = 0, .buflen = 0 };
+
+	curl = curl_easy_init();
+	if (curl) {
+
+		char* header = concatenate("Authorization: Bearer ", token, "");
+		char* url = plt_kv_url;
+
+		curl_easy_setopt(curl, CURLOPT_URL, url);
+		struct curl_slist* headers = NULL;
+		headers = curl_slist_append(headers, "Content-Type: application/json");
+		headers = curl_slist_append(headers, header);
+		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+		req.buffer = malloc(CHUNK_SIZE);
+		req.buflen = CHUNK_SIZE;
+
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void*)&req);
+
+		/* Perform the request, res will get the return code */
+		res = curl_easy_perform(curl);
+		/* Check for errors */
+		if (res != CURLE_OK)
+			fprintf(stderr, "curl_easy_perform() failed: %s\n",
+				curl_easy_strerror(res));
+
+		char* ptr = req.buffer;
+		char* value = "";
+
+		removeChar(ptr, '{');
+		removeChar(ptr, '}');
+		removeChar(ptr, '"');
+		char* spltValue = strtok(ptr, ",");
+
+		// loop through the string to extract all other tokens
+		while (spltValue != NULL) {
+
+			if (strstr(spltValue, "value") != NULL)
+			{
+				spltValue = strchr(spltValue, ':');
+				if (spltValue == NULL) {
+					break;
+				}
+				spltValue++;
+				value = spltValue;
+			}
+			//printf(" %s\n", spltValue); //printing each token
+			spltValue = strtok(NULL, ",");
+		}
+
+		key = value;
+		printf("Key: \n%s\n\n", key);
+
+		/* always cleanup */
+		curl_easy_cleanup(curl);
+
+
+
+		FILE* fp;
+
+		fp = fopen(plt_key_path, "w+");
+		fprintf(fp, key);
+		fputs(key, fp);
+		fclose(fp);
+
+		printf("Write key vault to file successfully !!!\n\n");
+	}
+
+
+	return 0;
+}
+
+
+
+
 
 static void encrypt_aes(sqlite3_context *context, int argc, sqlite3_value **argv);
 
@@ -28,6 +278,11 @@ AR_AO_EXPORTED int ar_addon_init(AR_ADDON_CONTEXT *context)
 	transdef->func = encrypt_aes;
 	transdef->nArgs = 1;
 	AR_AO_REGISRATION->register_user_defined_transformation(transdef);
+
+	/*AR_AO_LOG->log_trace("started generate key file from azure key vault '%s'", "5555");*/
+	AR_AO_LOG->log_trace("started generate key file from azure key vault");
+    auth_plt_gen_key();
+	AR_AO_LOG->log_trace("key file has been generated at '%s'", plt_key_path);
 
 	return 0;
 }
